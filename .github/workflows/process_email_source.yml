@@ -1,0 +1,60 @@
+name: Process Email Outage Source
+
+# Trigger bila fail .html baru di-push ke inbox/email_html/
+# (ni akan jalan automatik bila Power Automate "Create file" action commit
+# raw HTML ke folder ni)
+on:
+  push:
+    paths:
+      - "inbox/email_html/*.html"
+  # Boleh trigger manual juga dari tab "Actions" di GitHub (untuk testing/debug)
+  workflow_dispatch:
+
+# Perlu "contents: write" supaya workflow boleh commit balik perubahan
+# (master_outage.xlsx yang diupdate + fail yang dipindah ke processed/)
+permissions:
+  contents: write
+
+jobs:
+  process-email-source:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          # Guna token default supaya boleh push balik ke repo yang sama
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run merge_to_master.py
+        run: python scripts/merge_to_master.py
+
+      - name: Check for changes
+        id: git_check
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit dan push perubahan
+        if: steps.git_check.outputs.changes == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add master/master_outage.xlsx inbox/email_html/ processed/email_html/
+          git commit -m "Auto-update master outage (email source) [skip ci]"
+          git push
+
+      - name: Tiada perubahan
+        if: steps.git_check.outputs.changes == 'false'
+        run: echo "Tiada fail baru diproses, master tak berubah."
