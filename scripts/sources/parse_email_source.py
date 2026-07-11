@@ -17,8 +17,20 @@ field tu (bukan raise error) — supaya satu field hilang tak crash whole parse.
 """
 
 import re
+import sys
 from datetime import datetime
+from pathlib import Path
 from bs4 import BeautifulSoup
+
+# Supaya "from common.schema import ..." boleh jalan tak kira script ni
+# dipanggil dari mana (repo root, scripts/sources/, atau GitHub Actions runner)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from common.schema import COLUMNS, FORMULA_COLUMNS  # noqa: E402
+
+# Column output dari parser ni = semua COLUMNS KECUALI Duration (Hour),
+# sebab tu formula yang dikira semasa tulis ke excel (bukan dari source)
+OUTPUT_COLUMNS = [c for c in COLUMNS if c not in FORMULA_COLUMNS]
 
 
 # ---------------------------------------------------------------------------
@@ -248,20 +260,29 @@ def parse_email_html(html: str, subject: str = ""):
         # supaya info incident tak hilang terus (boleh review manual nanti)
         sites = [{"Site ID": "", "Site Name": "", "District": ""}]
 
+    # Nilai mentah setiap field, keyed macam nama column dalam schema.py
+    raw_values = {
+        "Svc Imp": svc_imp,
+        "Outage Start": outage_start,
+        "Outage End": outage_end,
+        "Severity": severity,
+        "Region": region,
+        "Status": tt_status,
+    }
+
     rows = []
     for site in sites:
-        rows.append({
+        row_values = {
             "INC No": inc_no,
             "Site ID": site["Site ID"],
             "Site Name": site["Site Name"],
-            "Svc Imp": svc_imp,
-            "Outage Start": outage_start,
-            "Outage End": outage_end,
-            "Severity": severity,
-            "Region": region,
-            "Status": tt_status,
             "District": site["District"],
-        })
+            **raw_values,
+        }
+        # Susun ikut OUTPUT_COLUMNS (dari schema.py) supaya konsisten dengan
+        # semua source parser lain — sesiapa baca schema.py, itulah source of truth
+        ordered_row = {col: row_values.get(col) for col in OUTPUT_COLUMNS}
+        rows.append(ordered_row)
 
     return rows
 
