@@ -40,3 +40,18 @@ NUMBER_FORMATS = {
 
 # Columns yang WAJIB ada value (row akan di-skip kalau kosong)
 REQUIRED_FIELDS = ["INC No", "Site ID"]
+
+# Merge behaviour bila row sedia ada dijumpai (match by DEDUP_KEYS):
+#
+# ALWAYS_OVERWRITE_FIELDS -> value terbaru dari source SENTIASA menang,
+#   walaupun cell sedia ada dah ada value. Sebab field ni memang jangka
+#   BERUBAH sepanjang lifecycle incident (contoh: Status OPEN -> CLOSED).
+ALWAYS_OVERWRITE_FIELDS = ["Status", "Outage End", "Severity"]
+
+# FILL_BLANK_ONLY_FIELDS -> hanya isi kalau cell sedia ada KOSONG.
+#   Kalau dah ada value, KEKALKAN (elak accidental overwrite data yang
+#   dah betul dengan value dari source lain yang mungkin kurang tepat).
+FILL_BLANK_ONLY_FIELDS = [
+    c for c in COLUMNS
+    if c not in ALWAYS_OVERWRITE_FIELDS and c not in DEDUP_KEYS and c not in FORMULA_COLUMNS
+]
