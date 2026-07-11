@@ -150,8 +150,21 @@ def extract_sites_table(soup):
     """
     Cari <td> yang label dia "Sites", masuk ke <td> sebelah (value),
     cari nested <table> di situ, parse header + data rows.
+
+    Handle DUA variant struktur:
+    1. Ada header row ("Site ID", "Site Name", dsb) -> map by header name
+    2. TAKDE header row (terus data) -> guna posisi column tetap:
+       [Site ID, Site Name, Marketing Cluster, District]
+       (variant ni jumpa dalam email dari client "Microsoft Word 15
+       (filtered medium)" generator, struktur border pun beza sikit
+       tapi tak relevant untuk parsing)
+
     Return: list of dict [{"Site ID": ..., "Site Name": ..., "District": ...}, ...]
     """
+    # Label header yang dijangka (lowercase, untuk case-insensitive match)
+    EXPECTED_HEADERS = {"site id", "site name", "marketing cluster", "district"}
+    DEFAULT_COLUMN_ORDER = ["Site ID", "Site Name", "Marketing Cluster", "District"]
+
     sites = []
 
     for tr in soup.find_all("tr"):
@@ -171,13 +184,20 @@ def extract_sites_table(soup):
         if not rows:
             continue
 
-        # Header row -> tentukan index column (Site ID, Site Name,
-        # Marketing Cluster, District boleh berubah urutan/wujud/tak wujud)
-        header_cells = rows[0].find_all("td")
-        headers = [_clean_text(c) for c in header_cells]
+        # --- Detect sama ada row pertama tu header atau terus data ---
+        first_row_cells = rows[0].find_all("td")
+        first_row_texts = {_clean_text(c).lower() for c in first_row_cells}
+        is_header_row = len(first_row_texts & EXPECTED_HEADERS) >= 2
 
-        # Data rows
-        for row in rows[1:]:
+        if is_header_row:
+            headers = [_clean_text(c) for c in first_row_cells]
+            data_rows = rows[1:]
+        else:
+            # Takde header -> guna posisi column tetap, SEMUA row = data
+            headers = DEFAULT_COLUMN_ORDER[: len(first_row_cells)]
+            data_rows = rows
+
+        for row in data_rows:
             cells = row.find_all("td")
             if len(cells) != len(headers):
                 continue
