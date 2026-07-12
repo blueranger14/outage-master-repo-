@@ -33,6 +33,7 @@ from common.excel_utils import (  # noqa: E402
     save_workbook,
 )
 from sources.parse_zip_source import process_zip  # noqa: E402
+from sort_master import sort_master  # noqa: E402
 
 
 def process_inbox(inbox_dir: Path, processed_dir: Path, master_path: Path):
@@ -112,6 +113,12 @@ def process_inbox(inbox_dir: Path, processed_dir: Path, master_path: Path):
     for zip_path in files_to_archive:
         dest = processed_dir / zip_path.name
         shutil.move(str(zip_path), str(dest))
+
+    # Auto-sort master (terkini di atas) — HANYA kalau ada row baru/diupdate,
+    # elak sort/save berulang tanpa perlu bila takde perubahan langsung.
+    if summary["rows_inserted"] > 0 or summary["rows_updated"] > 0:
+        print("\n[SORT] Menyusun master (Outage Start terkini di atas)...")
+        sort_master(str(master_path))
 
     return summary
 
