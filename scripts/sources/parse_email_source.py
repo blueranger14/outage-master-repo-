@@ -176,9 +176,19 @@ def extract_sites_table(soup):
         if label != "Sites":
             continue
 
-        nested_table = value_td.find("table")
-        if not nested_table:
+        # Cari nested table PALING DALAM (deepest), BUKAN yang pertama
+        # dijumpai. Sesetengah format email ada WRAPPER <table> tambahan
+        # membalut table Sites sebenar (contoh: <td>Sites</td><td><table>
+        # <tr><td><table>...data sebenar...</table></td></tr></table></td>)
+        # - kalau kita ambil table PERTAMA (terluar), dia cuma ada 1 sel
+        # besar (bukan header row), gagal detect header terus.
+        # BeautifulSoup punya find_all("table") return dalam urutan
+        # depth-first (table luar dulu, then table dalam), jadi table
+        # PALING DALAM = elemen TERAKHIR dalam list ni.
+        all_tables = value_td.find_all("table")
+        if not all_tables:
             continue
+        nested_table = all_tables[-1]
 
         rows = nested_table.find_all("tr")
         if not rows:
