@@ -65,8 +65,36 @@ SEVERITY_RE = re.compile(r'^Severity:[ \t]*(.+)?$', re.MULTILINE)
 REGION_RE   = re.compile(r'^Region[ \t]*:[ \t]*(.+)?$', re.MULTILINE)
 CP_RE       = re.compile(r'^CP[ \t]*:[ \t]*(.+)?$', re.MULTILINE)
 
-# Pattern untuk kenal pasti token "Site ID" (contoh: 9227B, 7039A, Q02279)
-SITE_CODE_RE = re.compile(r'^([0-9]{3,6}[A-Za-z]{1,2}|[QS][0-9]{3,6}[A-Za-z]?)$')
+# Pattern untuk kenal pasti token "Site ID". DUA bentuk:
+#   1. Digit dulu, huruf lepas (contoh: 9227B, 7039A) - format Borneo biasa
+#   2. SATU huruf prefix + digit + optional huruf suffix (contoh: Q02279,
+#      S00174, C00665, D00853, J02163, T00072, dsb - Peninsular guna
+#      pelbagai prefix ikut region/cluster, bukan cuma Q/S)
+#
+# PENTING: prefix mesti TEPAT SATU huruf. Token dengan 2+ huruf prefix
+# (contoh DQKCH0478, ME1019345177, WL1042439732) BUKAN site code - itu
+# Circuit ID/PTN number (muncul dalam block "Circuit ID:" berasingan,
+# tiada nama site lepas dia). Regex ni sengaja EXCLUDE pattern macam tu -
+# jangan ubah [A-Za-z] tunggal ni jadi terima >1 huruf prefix.
+SITE_CODE_RE = re.compile(r'^([0-9]{3,6}[A-Za-z]{1,2}|[A-Za-z][0-9]{3,6}[A-Za-z]?)$')
+
+# Pattern Marketing Cluster code (contoh: C047A, D018A, M077C, Q124E) -
+# SECARA SINTAKS ia match SITE_CODE_RE juga (satu huruf + 3 digit + satu
+# huruf), tapi ia CLUSTER bukan Site ID sebenar. Dipakai untuk EXCLUDE
+# token ni bila muncul sebagai token PERTAMA dalam format underscore
+# (contoh "D018A_D00833OD_KAMPUNG..." - "D018A" tu cluster, "D00833" tu
+# baru Site ID sebenar).
+MARKETING_CLUSTER_RE = re.compile(r'^[A-Za-z]\d{3}[A-Za-z]$')
+
+# Format "<digit code>-<nama>" (contoh: 20135-MILE_86_SDK-ACC1,
+# 43191-TMN_DELIMA2) - dijumpai dalam sesetengah Peninsular data untuk
+# site fixed-line/microwave. Kod = digit tulen (4-6 digit), tiada huruf.
+DASH_NUMERIC_RE = re.compile(r'^(\d{4,6})-(.+)$')
+
+# Kod site + suffix teknikal (contoh: D00833OD, W01515IB, W00350IB1) -
+# dipakai untuk extract Site ID sebenar dari segment ke-2 underscore
+# token bila segment pertama tu Marketing Cluster (rujuk atas).
+CODE_WITH_TECH_SUFFIX_RE = re.compile(r'^([A-Za-z]\d{4,6})[A-Za-z0-9]{0,4}$')
 
 # Panjang digit biasa untuk nombor INC (based on real data pattern - hampir
 # semua INC No ada 12 digit). Kalau lain, kemungkinan besar typo - script
@@ -134,22 +162,92 @@ def parse_cp_field(cp_raw):
     return entries
 
 
+def try_extract_underscore_token(token):
+    """
+    Cuba extract (site_id, site_name) dari SATU token tanpa space (guna
+    underscore atau dash sebagai separator). Return None kalau tak
+    confident (elak teka salah - lebih baik skip drpd data silap).
+
+    Handle 3 kes:
+    1. Format dash-numeric: "20135-MILE_86_SDK-ACC1" -> ('20135', 'MILE 86 SDK-ACC1')
+    2. Underscore, segment PERTAMA dah site code sah (bukan cluster):
+       "1203K_NIC_W066N_..." -> ('1203K', 'NIC W066N ...')
+    3. Underscore, segment PERTAMA cluster, kod sebenar dalam segment KEDUA:
+       "D018A_D00833OD_KAMPUNG_SUNGAI_PERIA" -> ('D00833', 'KAMPUNG SUNGAI PERIA')
+    """
+    # --- Kes 1: dash-numeric ---
+    m = DASH_NUMERIC_RE.match(token)
+    if m:
+        code = m.group(1)
+        name = m.group(2).replace('_', ' ').strip()
+        return code, name
+
+    if '_' not in token:
+        return None
+
+    segments = token.split('_')
+    if not segments or not segments[0]:
+        return None
+
+    first_seg = segments[0]
+
+    # --- Kes 2: segment pertama terus site code sah ---
+    if SITE_CODE_RE.match(first_seg) and not MARKETING_CLUSTER_RE.match(first_seg):
+        name = ' '.join(segments[1:]).replace('_', ' ').strip()
+        return first_seg, name
+
+    # --- Kes 3: segment pertama BUKAN site code sah - scan SEMUA segment
+    # lain (bukan cuma segment ke-2) untuk cari kod dengan tech suffix.
+    # Kenapa loop (bukan cuma check index [1]): kadang ada LEBIH satu
+    # segment "non-code" sebelum kod sebenar muncul, contoh
+    # "B1_D018A_D00570OD_..." - "B1" (marker) lepas tu "D018A" (cluster)
+    # BARU "D00570OD" (kod sebenar) di segment KE-3.
+    # CODE_WITH_TECH_SUFFIX_RE anchored ketat (huruf tunggal + 4-6 digit)
+    # jadi cluster (cuma 3 digit) & marker pendek takkan tersalah match.
+    for idx, seg in enumerate(segments[1:], start=1):
+        m2 = CODE_WITH_TECH_SUFFIX_RE.match(seg)
+        if m2:
+            code = m2.group(1)
+            name = ' '.join(segments[idx + 1:]).replace('_', ' ').strip()
+            return code, name
+
+    return None  # tak confident - biar skip drpd teka salah
+
+
 def build_site_map(msg):
     """Scan SELURUH mesej untuk sebarang baris berbentuk '<Site ID> <Site
     Name>' - tak kira dia dalam block CP, Affected Sites, atau vendor block
-    (Sacofa/CTSB) - semua dianggap 1 record. Return dict {site_id: site_name}."""
+    (Sacofa/CTSB) - semua dianggap 1 record. Return dict {site_id: site_name}.
+
+    Handle juga baris SATU TOKEN (tiada space) yang guna underscore/dash
+    sebagai separator (contoh format "1203K_NIC_..." atau
+    "20135-MILE_86_SDK-ACC1") - rujuk try_extract_underscore_token().
+    """
     sites = {}
     for line in msg.split("\n"):
         line = line.strip()
         if not line or ":" in line:
             continue
+
         parts = line.split(None, 1)
         code = parts[0]
-        if not SITE_CODE_RE.match(code):
+
+        if SITE_CODE_RE.match(code):
+            name = parts[1].strip() if len(parts) > 1 else ""
+            if code not in sites or (not sites[code] and name):
+                sites[code] = name
             continue
-        name = parts[1].strip() if len(parts) > 1 else ""
-        if code not in sites or (not sites[code] and name):
-            sites[code] = name
+
+        # Code (token pertama) tak match terus - cuba underscore/dash
+        # extraction KALAU line ni memang satu token je (tiada space lain
+        # selepas token pertama, sebab kalau ada, itu mungkin format lain
+        # yang kita tak faham, elak teka)
+        if len(parts) == 1:
+            extracted = try_extract_underscore_token(code)
+            if extracted:
+                ex_code, ex_name = extracted
+                if ex_code not in sites or (not sites[ex_code] and ex_name):
+                    sites[ex_code] = ex_name
 
     # Field 'CP :' ada colon kat depan, jadi terlepas dari scan di atas -
     # parse & tambah secara eksplisit.
