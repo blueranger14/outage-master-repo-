@@ -33,6 +33,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run generate_daily_report.py
+        id: gen_report
         run: |
           if [ -n "${{ github.event.inputs.target_date }}" ]; then
             python scripts/generate_daily_report.py --date "${{ github.event.inputs.target_date }}"
@@ -61,3 +62,28 @@ jobs:
       - name: Tiada perubahan
         if: steps.git_check.outputs.changes == 'false'
         run: echo "Tiada row untuk tarikh disasar, report tak dihasilkan."
+
+      # Hantar report ke Power Automate (base64) untuk save OneDrive +
+      # email team - HANYA kalau report berjaya dihasilkan.
+      - name: Hantar report ke Power Automate
+        if: steps.gen_report.outputs.report_generated == 'true'
+        env:
+          PA_WEBHOOK_URL: ${{ secrets.PA_ONEDRIVE_WEBHOOK_URL }}
+        run: |
+          REPORT_PATH="${{ steps.gen_report.outputs.report_path }}"
+          REPORT_FILENAME="${{ steps.gen_report.outputs.report_filename }}"
+          ROW_COUNT="${{ steps.gen_report.outputs.row_count }}"
+
+          CONTENT_B64=$(base64 -w 0 "$REPORT_PATH")
+
+          curl -s -X POST "$PA_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "filename": "$REPORT_FILENAME",
+            "content_base64": "$CONTENT_B64",
+            "row_count": "$ROW_COUNT"
+          }
+          EOF
+
+          echo "Report dihantar ke Power Automate: $REPORT_FILENAME"
