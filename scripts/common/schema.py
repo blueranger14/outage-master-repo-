@@ -55,3 +55,13 @@ FILL_BLANK_ONLY_FIELDS = [
     c for c in COLUMNS
     if c not in ALWAYS_OVERWRITE_FIELDS and c not in DEDUP_KEYS and c not in FORMULA_COLUMNS
 ]
+
+# Values yang dianggap "kosong" walaupun bukan None/"" secara literal.
+# Contoh: zip source (WhatsApp) kadang tulis "N/A" atau "0" untuk Site
+# Name yang tak dapat resolve (NOC taip placeholder sementara tunggu
+# confirm nama sebenar), bukan cell benar-benar kosong. Kalau tak handle
+# ni, placeholder tu akan kekal SELAMANYA dalam master (fill-blank-only
+# logic anggap cell tu "dah ada value"), walaupun email source kemudian
+# bawa value yang betul untuk INC No + Site ID yang sama.
+# Perbandingan case-insensitive & strip whitespace.
+BLANK_LIKE_VALUES = {"", "n/a", "na", "-", "tbc", "unknown", "none", "0", "#n/a"}
