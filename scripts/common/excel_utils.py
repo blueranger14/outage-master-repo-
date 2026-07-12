@@ -17,11 +17,24 @@ from common.schema import (  # noqa: E402
     FORMULA_COLUMNS,
     NUMBER_FORMATS,
     ALWAYS_OVERWRITE_FIELDS,
+    BLANK_LIKE_VALUES,
 )
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill
+
+
+# ---------------------------------------------------------------------------
+# Check sama ada value dianggap "kosong" (None/"" atau placeholder macam
+# "N/A", "-", "TBC" — rujuk BLANK_LIKE_VALUES dalam schema.py)
+# ---------------------------------------------------------------------------
+def _is_blank_like(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip().lower() in BLANK_LIKE_VALUES:
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -72,12 +85,44 @@ def get_or_create_workbook(path: str):
 
 
 # ---------------------------------------------------------------------------
+# Build index {(inc_no, site_id): row_idx} SEKALI je, untuk O(1) lookup.
+# PENTING untuk performance dengan data volum besar (puluhan ribu row) -
+# find_existing_row() yang scan seluruh sheet setiap kali dipanggil jadi
+# O(n) PER ROW = O(n^2) keseluruhan, terlalu perlahan untuk >10k rows.
+# Guna build_index() sekali, then dict lookup terus (O(1)) untuk setiap
+# row yang diproses.
+# ---------------------------------------------------------------------------
+def build_index(ws) -> dict:
+    """
+    Return dict {(inc_no, site_id): row_idx} untuk semua row sedia ada.
+    Panggil SEKALI je di awal merge, bukan berulang kali.
+    """
+    inc_col = COLUMNS.index("INC No") + 1
+    site_col = COLUMNS.index("Site ID") + 1
+
+    index = {}
+    for row_idx in range(2, ws.max_row + 1):
+        inc_val = ws.cell(row=row_idx, column=inc_col).value
+        site_val = ws.cell(row=row_idx, column=site_col).value
+        if inc_val is None and site_val is None:
+            continue
+        index[(inc_val, site_val)] = row_idx
+    return index
+
+
+# ---------------------------------------------------------------------------
 # Cari row number sedia ada untuk (INC No, Site ID) tertentu, None kalau baru
 # ---------------------------------------------------------------------------
 def find_existing_row(ws, inc_no: str, site_id: str):
     """
     Scan column INC No & Site ID (dari row 2 hingga last row), return row
     number kalau match dijumpai, None kalau tiada.
+
+    ⚠️  PERINGATAN PERFORMANCE: function ni O(n) PER PANGGILAN (scan
+    seluruh sheet). Untuk data volum besar (>1000 rows) atau proses
+    banyak row dalam satu run, guna build_index() SEKALI di awal +
+    dict lookup terus — JANGAN panggil find_existing_row() dalam loop
+    untuk setiap row (jadi O(n^2), boleh timeout untuk data besar).
     """
     inc_col = COLUMNS.index("INC No") + 1
     site_col = COLUMNS.index("Site ID") + 1
@@ -127,17 +172,16 @@ def write_row(ws, row_idx: int, row_data: dict, fill_blank_only: bool = False):
 
         new_value = row_data[col_name]
 
-        # fill_blank_only: skip kalau cell dah ada value — KECUALI field ni
-        # tergolong dalam ALWAYS_OVERWRITE_FIELDS (contoh Status, Outage End,
-        # Severity — field ni memang jangka berubah sepanjang lifecycle
-        # incident, so value terbaru dari source SENTIASA menang)
+        # fill_blank_only: skip kalau cell dah ada value SEBENAR — KECUALI
+        # field ni tergolong dalam ALWAYS_OVERWRITE_FIELDS, atau cell sedia
+        # ada tu "blank-like" (contoh "N/A", "-", "TBC" — bukan value
+        # sebenar, jadi masih boleh diganti dengan value lebih baik)
         if fill_blank_only and col_name not in ALWAYS_OVERWRITE_FIELDS:
-            existing_value = cell.value
-            if existing_value not in (None, ""):
+            if not _is_blank_like(cell.value):
                 continue
 
-        if new_value in (None, ""):
-            continue  # jangan overwrite dengan blank
+        if _is_blank_like(new_value):
+            continue  # jangan tulis value baru yang "kosong" (None/""/N/A/dsb)
 
         cell.value = new_value
 
@@ -147,11 +191,30 @@ def write_row(ws, row_idx: int, row_data: dict, fill_blank_only: bool = False):
 
 # ---------------------------------------------------------------------------
 # Append row baru ke hujung worksheet
+#
+# ⚠️ PENTING: JANGAN guna ws.max_row untuk tentukan row baru bila panggil
+# fungsi ni BERULANG KALI dalam loop (contoh proses ribuan row). ws.max_row
+# dalam openpyxl BUKAN O(1) — setiap panggilan boleh jadi O(n) (scan
+# balik worksheet), jadi loop append berulang jadi O(n^2) keseluruhan -
+# lambat drastik untuk data >10k rows (contoh 48k rows boleh ambil
+# BERPULUH minit, bukan saat).
+#
+# Untuk BULK insert (banyak row berturutan), guna next_row_idx yang
+# di-track SENDIRI oleh caller (lihat merge_to_master.py / 
+# merge_zip_to_master.py punya pattern), bukan panggil append_row()
+# berulang kali yang each time query ws.max_row.
 # ---------------------------------------------------------------------------
-def append_row(ws, row_data: dict):
-    new_row_idx = ws.max_row + 1
-    write_row(ws, new_row_idx, row_data, fill_blank_only=False)
-    return new_row_idx
+def append_row(ws, row_data: dict, row_idx: int = None):
+    """
+    Append row baru. Kalau row_idx diberi, guna terus (caller kena track
+    sendiri, elak query ws.max_row berulang). Kalau tak diberi, fallback
+    guna ws.max_row + 1 (selamat untuk single/occasional call, TAPI
+    JANGAN guna fallback ni dalam loop besar - O(n^2)).
+    """
+    if row_idx is None:
+        row_idx = ws.max_row + 1
+    write_row(ws, row_idx, row_data, fill_blank_only=False)
+    return row_idx
 
 
 # ---------------------------------------------------------------------------
