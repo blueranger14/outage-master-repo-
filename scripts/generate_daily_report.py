@@ -13,6 +13,7 @@ default = semalam)
 """
 
 import sys
+import os
 import argparse
 import zoneinfo
 from pathlib import Path
@@ -93,6 +94,23 @@ def generate_daily_report(master_path: str, reports_dir: str, target_date=None):
     return report_path, len(matched_rows)
 
 
+def write_github_output(report_path, count):
+    """Set GITHUB_OUTPUT: report_generated (true/false), report_filename,
+    report_path — untuk step lepas dalam workflow YAML guna conditional."""
+    gh_output_path = os.environ.get("GITHUB_OUTPUT")
+    if not gh_output_path:
+        return  # local run, bukan dalam GitHub Actions
+
+    with open(gh_output_path, "a", encoding="utf-8") as gh:
+        if report_path:
+            gh.write("report_generated=true\n")
+            gh.write(f"report_filename={Path(report_path).name}\n")
+            gh.write(f"report_path={report_path}\n")
+            gh.write(f"row_count={count}\n")
+        else:
+            gh.write("report_generated=false\n")
+
+
 def main():
     repo_root = Path(__file__).resolve().parent.parent
 
@@ -116,6 +134,8 @@ def main():
         target_date = datetime.strptime(args.date, "%d/%m/%Y").date()
 
     report_path, count = generate_daily_report(args.master, args.reports, target_date)
+
+    write_github_output(report_path, count)
 
     print()
     if report_path:
