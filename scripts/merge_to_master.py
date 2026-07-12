@@ -31,6 +31,7 @@ from common.excel_utils import (  # noqa: E402
     save_workbook,
 )
 from sources.parse_email_source import parse_email_html  # noqa: E402
+from sort_master import sort_master  # noqa: E402
 
 
 def process_inbox(inbox_dir: Path, processed_dir: Path, master_path: Path):
@@ -101,6 +102,12 @@ def process_inbox(inbox_dir: Path, processed_dir: Path, master_path: Path):
     for html_file in files_to_archive:
         dest = processed_dir / html_file.name
         shutil.move(str(html_file), str(dest))
+
+    # Auto-sort master (terkini di atas) — HANYA kalau ada row baru/diupdate,
+    # elak sort/save berulang tanpa perlu bila takde perubahan langsung.
+    if summary["rows_inserted"] > 0 or summary["rows_updated"] > 0:
+        print("\n[SORT] Menyusun master (Outage Start terkini di atas)...")
+        sort_master(str(master_path))
 
     return summary
 
