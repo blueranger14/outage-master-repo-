@@ -35,8 +35,8 @@ TZ = zoneinfo.ZoneInfo("Asia/Kuala_Lumpur")
 # ─── CONFIG FILTER (toggle manual — uncomment baris yang nak guna) ─────────
 
 # -- Date filter --
-DATE_FILTER = None  # None = proses SEMUA tarikh (default)
-# DATE_FILTER = (datetime.now(TZ) - timedelta(days=1)).date()  # <- semalam sahaja
+# DATE_FILTER = None  # None = proses SEMUA tarikh (default)
+DATE_FILTER = (datetime.now(TZ) - timedelta(days=1)).date()  # <- semalam sahaja
 
 # -- Severity filter --
 SEVERITY_FILTER = None  # None = proses SEMUA severity (default)
