@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "sources"))
 
 from common.excel_utils import (  # noqa: E402
     get_or_create_workbook,
-    find_existing_row,
+    build_index,
     write_row,
     append_row,
     save_workbook,
@@ -62,6 +62,8 @@ def process_inbox(inbox_dir: Path, processed_dir: Path, master_path: Path):
         return summary
 
     wb, ws = get_or_create_workbook(str(master_path))
+    index = build_index(ws)  # O(n) SEKALI je (bukan per row)
+    next_row_idx = ws.max_row + 1  # panggil SEKALI je, track sendiri lepas ni
 
     files_to_archive = []
 
@@ -89,12 +91,15 @@ def process_inbox(inbox_dir: Path, processed_dir: Path, master_path: Path):
                 if not inc_no or not site_id:
                     continue  # skip row tanpa key wajib
 
-                existing_row_idx = find_existing_row(ws, inc_no, site_id)
+                key = (inc_no, site_id)
+                existing_row_idx = index.get(key)
                 if existing_row_idx:
                     write_row(ws, existing_row_idx, row, fill_blank_only=True)
                     summary["rows_updated"] += 1
                 else:
-                    append_row(ws, row)
+                    append_row(ws, row, row_idx=next_row_idx)
+                    index[key] = next_row_idx
+                    next_row_idx += 1
                     summary["rows_inserted"] += 1
 
             print(f"  [OK] {zip_path.name} — {len(rows)} site row(s) diproses")
