@@ -14,6 +14,7 @@ default = semalam)
 
 import sys
 import os
+import json
 import argparse
 import zoneinfo
 from pathlib import Path
@@ -77,10 +78,10 @@ def generate_daily_report(master_path: str, reports_dir: str, target_date=None):
     print(f"Row match: {len(matched_rows)}")
 
     if not matched_rows:
-        return None, 0
+        return None, 0, []
 
     reports_dir.mkdir(parents=True, exist_ok=True)
-    report_filename = f"CD_OUTAGE_{target_date.strftime('%d%m%Y')}.xlsx"
+    report_filename = f"daily_report_{target_date.strftime('%d%m%Y')}.xlsx"
     report_path = reports_dir / report_filename
 
     wb_report, ws_report = get_or_create_workbook(str(report_path))
@@ -91,12 +92,25 @@ def generate_daily_report(master_path: str, reports_dir: str, target_date=None):
     save_workbook(wb_report, str(report_path))
     print(f"Report ditulis: {report_path}")
 
-    return report_path, len(matched_rows)
+    # Bina versi JSON-safe (datetime -> ISO string) untuk PA/Office Script
+    # consume terus, tak payah parse fail xlsx.
+    json_rows = []
+    for row_data in matched_rows:
+        json_row = {}
+        for k, v in row_data.items():
+            if isinstance(v, datetime):
+                json_row[k] = v.isoformat()
+            else:
+                json_row[k] = v
+        json_rows.append(json_row)
+
+    return report_path, len(matched_rows), json_rows
 
 
-def write_github_output(report_path, count):
+def write_github_output(report_path, count, json_rows=None):
     """Set GITHUB_OUTPUT: report_generated (true/false), report_filename,
-    report_path — untuk step lepas dalam workflow YAML guna conditional."""
+    report_path, row_count, rows_json (untuk PA Office Script consume terus
+    tanpa perlu parse fail xlsx)."""
     gh_output_path = os.environ.get("GITHUB_OUTPUT")
     if not gh_output_path:
         return  # local run, bukan dalam GitHub Actions
@@ -107,6 +121,12 @@ def write_github_output(report_path, count):
             gh.write(f"report_filename={Path(report_path).name}\n")
             gh.write(f"report_path={report_path}\n")
             gh.write(f"row_count={count}\n")
+            # Multiline output guna heredoc syntax (GitHub Actions punya cara
+            # untuk output yang ada newline/special char - json compact takde
+            # newline pun, tapi guna heredoc untuk konsisten & selamat)
+            gh.write("rows_json<<GHOUTPUT_EOF\n")
+            gh.write(json.dumps(json_rows or []) + "\n")
+            gh.write("GHOUTPUT_EOF\n")
         else:
             gh.write("report_generated=false\n")
 
@@ -133,9 +153,9 @@ def main():
     if args.date:
         target_date = datetime.strptime(args.date, "%d/%m/%Y").date()
 
-    report_path, count = generate_daily_report(args.master, args.reports, target_date)
+    report_path, count, json_rows = generate_daily_report(args.master, args.reports, target_date)
 
-    write_github_output(report_path, count)
+    write_github_output(report_path, count, json_rows)
 
     print()
     if report_path:
