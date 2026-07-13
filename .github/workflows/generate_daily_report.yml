@@ -63,8 +63,9 @@ jobs:
         if: steps.git_check.outputs.changes == 'false'
         run: echo "Tiada row untuk tarikh disasar, report tak dihasilkan."
 
-      # Hantar report ke Power Automate (base64) untuk save OneDrive +
-      # email team - HANYA kalau report berjaya dihasilkan.
+      # Hantar report ke Power Automate (base64 + rows_json) untuk save
+      # OneDrive, email team, DAN update master copy dalam SharePoint
+      # (append + resort) - HANYA kalau report berjaya dihasilkan.
       - name: Hantar report ke Power Automate
         if: steps.gen_report.outputs.report_generated == 'true'
         env:
@@ -76,14 +77,24 @@ jobs:
 
           CONTENT_B64=$(base64 -w 0 "$REPORT_PATH")
 
+          # rows_json datang terus dari step gen_report punya output (dah
+          # dalam format JSON array compact), tulis ke fail sementara dulu
+          # supaya boleh guna jq --slurpfile (elak isu escaping bila embed
+          # terus JSON bertingkat dalam heredoc JSON lain)
+          cat > /tmp/rows.json << 'ROWS_EOF'
+          ${{ steps.gen_report.outputs.rows_json }}
+          ROWS_EOF
+
+          jq -n \
+            --arg filename "$REPORT_FILENAME" \
+            --arg content "$CONTENT_B64" \
+            --arg count "$ROW_COUNT" \
+            --slurpfile rows /tmp/rows.json \
+            '{filename: $filename, content_base64: $content, row_count: $count, rows_json: $rows[0]}' \
+            > /tmp/payload.json
+
           curl -s -X POST "$PA_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d @- <<EOF
-          {
-            "filename": "$REPORT_FILENAME",
-            "content_base64": "$CONTENT_B64",
-            "row_count": "$ROW_COUNT"
-          }
-          EOF
+            -d @/tmp/payload.json
 
           echo "Report dihantar ke Power Automate: $REPORT_FILENAME"
