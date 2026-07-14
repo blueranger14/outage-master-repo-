@@ -81,7 +81,7 @@ def generate_daily_report(master_path: str, reports_dir: str, target_date=None):
         return None, 0, []
 
     reports_dir.mkdir(parents=True, exist_ok=True)
-    report_filename = f"daily_report_{target_date.strftime('%d%m%Y')}.xlsx"
+    report_filename = f"CD_OUTAGE_{target_date.strftime('%d%m%Y')}.xlsx"
     report_path = reports_dir / report_filename
 
     wb_report, ws_report = get_or_create_workbook(str(report_path))
